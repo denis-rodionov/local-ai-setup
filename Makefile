@@ -1,4 +1,5 @@
-.PHONY: install ollama-start ollama-stop ollama-status ollama-enable ollama-disable
+.PHONY: install ollama-start ollama-stop ollama-status ollama-enable ollama-disable \
+	cluster-up cluster-down cluster-status cluster-memory webhook-install
 
 install:
 	./scripts/install.sh
@@ -17,3 +18,18 @@ ollama-enable:
 
 ollama-disable:
 	./scripts/ollama.sh disable
+
+cluster-up:
+	./scripts/cluster.sh up
+
+cluster-down:
+	./scripts/cluster.sh down
+
+cluster-status:
+	./scripts/cluster.sh status
+
+cluster-memory:
+	./scripts/cluster.sh memory
+
+webhook-install:
+	./deploy/image-arch-webhook/install.sh

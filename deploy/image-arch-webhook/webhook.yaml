@@ -1,0 +1,174 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: image-arch-webhook
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: image-arch-webhook
+  namespace: image-arch-webhook
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: image-arch-webhook
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: image-arch-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: image-arch-webhook
+subjects:
+  - kind: ServiceAccount
+    name: image-arch-webhook
+    namespace: image-arch-webhook
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned
+  namespace: image-arch-webhook
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: image-arch-webhook-ca
+  namespace: image-arch-webhook
+spec:
+  isCA: true
+  commonName: image-arch-webhook-ca
+  secretName: image-arch-webhook-ca
+  duration: 8760h
+  issuerRef:
+    name: selfsigned
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: image-arch-webhook-ca
+  namespace: image-arch-webhook
+spec:
+  ca:
+    secretName: image-arch-webhook-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: image-arch-webhook
+  namespace: image-arch-webhook
+spec:
+  secretName: image-arch-webhook-tls
+  duration: 2160h
+  renewBefore: 360h
+  dnsNames:
+    - image-arch-webhook.image-arch-webhook.svc
+    - image-arch-webhook.image-arch-webhook.svc.cluster.local
+  issuerRef:
+    name: image-arch-webhook-ca
+    kind: Issuer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: image-arch-webhook
+  namespace: image-arch-webhook
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: image-arch-webhook
+  template:
+    metadata:
+      labels:
+        app: image-arch-webhook
+    spec:
+      serviceAccountName: image-arch-webhook
+      containers:
+        - name: webhook
+          image: python:3.12-slim
+          command: ["python", "/webhook/webhook.py"]
+          ports:
+            - name: https
+              containerPort: 8443
+          volumeMounts:
+            - name: code
+              mountPath: /webhook
+              readOnly: true
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: https
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+      volumes:
+        - name: code
+          configMap:
+            name: image-arch-webhook
+        - name: tls
+          secret:
+            secretName: image-arch-webhook-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: image-arch-webhook
+  namespace: image-arch-webhook
+spec:
+  selector:
+    app: image-arch-webhook
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: image-arch-webhook
+  annotations:
+    cert-manager.io/inject-ca-from: image-arch-webhook/image-arch-webhook
+webhooks:
+  - name: image-arch.local-ai.svc
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    timeoutSeconds: 15
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - cert-manager
+            - image-arch-webhook
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+    clientConfig:
+      service:
+        namespace: image-arch-webhook
+        name: image-arch-webhook
+        path: /mutate
+        port: 8443

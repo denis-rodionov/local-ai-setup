@@ -20,9 +20,13 @@ This repo is the infrastructure. Host agents, the Colima profile, Kubernetes man
 
 You start and stop it from this repo (`make ollama-start`, `make ollama-stop`, `make ollama-status`). A LaunchAgent starts it at login with no terminal window. `make ollama-disable` turns that login start off, and `make ollama-enable` turns it back on. `make ollama-stop` stops the process until the next start or the next login.
 
-**Kubernetes is Colima's built-in k3s.** Colima 0.10 already has this (`colima start --kubernetes`). There is no second k3s install, no k3d, and no Docker Desktop. The profile name is `ai`, so a later Docker-only VM can still use the `default` profile. kubectl context will be `colima-ai`.
+**Kubernetes is Colima's built-in k3s.** Colima 0.10 already has this (`colima start --kubernetes`). There is no second k3s install, no k3d, and no Docker Desktop. The profile name is `ai`, so a later Docker-only VM can still use the `default` profile. Colima writes that profile into `~/.kube/config` as `colima-ai`. The start script renames the cluster, user, and context to `local`, which is the name Lens uses.
 
-**The VM is small on purpose.** 4 CPUs, 10 GiB RAM, 60 GiB disk, `vz` + `virtiofs`. The 18 GB model plus KV cache stays on the Mac. The VM runs the web UI, the proxy, and later agents.
+**The VM is Colima on Apple's `vz` engine.** 4 CPUs, 25 GiB RAM, 100 GiB root disk, 160 GiB data disk, `virtiofs`. Those 25 GiB stay reserved on the Mac while the VM is running, including when the cluster is idle. krunkit can return unused RAM, but on Colima 0.10 its data disk can fail to mount after a restart, so images and cluster data fall onto the root disk. That is a bad trade for a cluster that starts every day. krunkit is a Colima engine, not a substitute for Colima, and it does not move Qwen onto the GPU.
+
+A large test raises the reservation with a restart (`make cluster-memory MEMORY=30`), then returns it to 25 GiB. About 30 GiB is the top end while Qwen is loaded. The memory size can change across a restart. The VM type cannot. No Mac-local Kubernetes grows past its boot-time size while the cluster is still running.
+
+Qwen stays outside the VM (~18 GB when loaded). Kubernetes ephemeral storage is the VM root disk, 100 GiB (`rootDisk` in `colima/ai.yaml`). Colima’s separate data disk is 160 GiB. Image layers live on that disk. Both can only grow, and the image files fill as data is written.
 
 **LiteLLM is the only model API.** Chat, downloaded agents, and a future OpenRouter model all use one OpenAI-compatible URL and stable names:
 
@@ -126,7 +130,7 @@ After sleep, Metal can drop the weights. The next request loads them again. Keep
 | --- | --- |
 | Qwen weights | 18 GB |
 | KV cache at 32k context | several GB more, depends on the chat |
-| Colima VM | 10 GB |
+| Colima VM, reserved while it is running | 25 GB normally, up to about 30 GB for a large test |
 | macOS and apps | the rest of 64 GB |
 
 One loaded model is the cap until you raise `OLLAMA_MAX_LOADED_MODELS` and accept the RAM.
@@ -166,5 +170,5 @@ scripts/
 1. Hostnames are `https://chat.test` and `https://llm.test/v1`.
 2. Open WebUI talks only to LiteLLM, unless step 6 shows that Qwen thinking is too poor.
 3. Ollama has no public hostname. It listens on loopback until the cluster needs it. Port `11434` is blocked on `en0` and `en1` in step 4.
-4. VM size 4 CPU / 10 GiB / 60 GiB.
+4. VM size 4 CPU / 25 GiB RAM on `vz` / 100 GiB root disk / 160 GiB data disk. A large test may raise RAM for one restart, then put it back.
 5. First agents are Open WebUI Knowledge and catalog tools. A separate downloaded app waits until you name it.

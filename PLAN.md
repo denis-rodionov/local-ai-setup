@@ -1,10 +1,14 @@
 # Plan
 
-Status: accepted. Finish a step, check the result, then start the next one. Each step adds files to this repo and applies only those files.
+Status: steps 1 and 2 are done. Next is step 3. Finish a step, check the result, then start the next one. Each step adds files to this repo and applies only those files.
 
-Current terminal `ollama serve` keeps working until step 1 replaces it.
+Step 1 is in place. Ollama runs from the login agent on `127.0.0.1:11434`, and `qwen3.8:27b-mlx` stays loaded.
 
-## Step 1 — Ollama as a login service
+Step 2 is in place. Colima profile `ai` is running on `vz`: 4 CPUs, 25 GiB RAM, 100 GiB root disk, 160 GiB data disk. `kubectl --context local get nodes` shows one Ready node, and Traefik is running. The original "no application pods" check is no longer true. An aihub release is already in `aihub-denistest`.
+
+`make webhook-install` is also installed. It is not a numbered step. On pod creation it leaves a tag alone when the image includes arm64, and rewrites a manifest list with no arm64 build to the amd64 digest. `kube-system`, `cert-manager`, and the webhook namespace are skipped. Existing pods keep their spec until they are recreated.
+
+## Step 1 — Ollama as a login service (done)
 
 Add `host/launchagents/com.local-ai.ollama.plist`, `scripts/ollama.sh`, and Makefile targets.
 
@@ -25,19 +29,22 @@ Done when:
 - Closing the terminal does not stop the API
 - One short generate keeps the model loaded (`OLLAMA_KEEP_ALIVE=-1`)
 
-## Step 2 — Empty k3s cluster
+## Step 2 — k3s cluster (done)
 
 Add `colima/ai.yaml` and a script that copies it to `~/.colima/ai/colima.yaml` only if that profile does not exist yet, then runs `colima start --profile ai`.
 
-The file sets `vmType: vz`, `mountType: virtiofs`, 4 CPUs, 10 GiB RAM, 60 GiB disk, `gatewayAddress: 192.168.5.2`, Kubernetes `v1.35.0+k3s1`, and a `k3sArgs` list that does not contain `--disable=traefik`. Colima's default list disables Traefik. The first check is that the override actually won.
+The file sets `vmType: vz`, `mountType: virtiofs`, 4 CPUs, 25 GiB RAM, 100 GiB root disk, 160 GiB data disk, `gatewayAddress: 192.168.5.2`, Kubernetes `v1.35.0+k3s1`, and a `k3sArgs` list that does not contain `--disable=traefik`. Colima's default list disables Traefik. The first check is that the override actually won.
+
+Those 25 GiB are reserved on the Mac for the whole time the VM is running. `make cluster-memory MEMORY=30` raises it with a restart. `make cluster-memory MEMORY=25` puts it back. Do not switch this profile to krunkit. On Colima 0.10 that engine can leave the data disk unmounted after a restart.
 
 Done when:
 
-- `kubectl --context colima-ai get nodes` shows one Ready node
-- `kubectl --context colima-ai get pods -A` shows Traefik running
-- No application pods exist yet
+- `kubectl --context local get nodes` shows one Ready node
+- `kubectl --context local get pods -A` shows Traefik running
 
-If Traefik is missing, fix `k3sArgs` before step 4. Do not deploy LiteLLM yet.
+The original third check was an empty cluster. That is no longer the live state: aihub and the image webhook are already there. Do not deploy LiteLLM until step 3 is checked.
+
+If Traefik is missing, fix `k3sArgs` before step 4.
 
 ## Step 3 — Pod to Ollama
 

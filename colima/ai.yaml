@@ -1,0 +1,25 @@
+# Colima profile "ai". Copy to ~/.colima/ai/colima.yaml before the first start.
+# vmType, mountType, and runtime cannot be changed later.
+# memory can change with `make cluster-memory`, which restarts the VM.
+# rootDisk is the filesystem Kubernetes shows as ephemeral storage. It can only grow.
+
+cpu: 4
+disk: 160
+memory: 25
+rootDisk: 100
+arch: host
+runtime: docker
+vmType: vz
+mountType: virtiofs
+
+kubernetes:
+  enabled: true
+  version: v1.35.0+k3s1
+  # Empty on purpose. Colima's default is --disable=traefik.
+  k3sArgs: []
+  port: 6443
+
+network:
+  gatewayAddress: 192.168.5.2
+
+autoActivate: true
