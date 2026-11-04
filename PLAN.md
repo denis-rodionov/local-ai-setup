@@ -1,6 +1,6 @@
 # Plan
 
-Status: steps 1, 2, and 3 are done on this Mac. Next is step 4. Finish a step, check the result, then start the next one. Each step adds files to this repo and applies only those files.
+Status: steps 1 through 4 are done on this Mac. Next is step 5. Finish a step, check the result, then start the next one. Each step adds files to this repo and applies only those files.
 
 This machine has no aihub release. Step 3 installed cert-manager and the image webhook.
 
@@ -56,7 +56,7 @@ Done when:
 - A new pod whose image is an amd64-only manifest list is admitted with the amd64 digest
 - A new pod whose image includes arm64 keeps the original tag
 
-## Step 4 — Quick stop and start
+## Step 4 — Quick stop and start (done)
 
 A way to pause the whole local setup without opening a terminal, and to bring it back the same way. Cmd+Space is the way to launch it. A Finder Quick Action is a Services-menu item, so the thing Spotlight opens is a small app.
 
