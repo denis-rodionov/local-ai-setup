@@ -25,11 +25,16 @@ model_loaded() {
   curl -sf "${API}/api/ps" | python3 -c "import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if any(m.get('name')=='${MODEL}' for m in d.get('models') or []) else 1)"
 }
 
+"$ROOT/scripts/spotlight.sh"
+
 if launchctl print "$JOB" >/dev/null 2>&1 && model_loaded; then
   echo "Ollama is already installed and ${MODEL} is loaded."
   "$ROOT/scripts/ollama.sh" status
   exit 0
 fi
+
+# `ollama list` and `ollama pull` need the server. On a fresh Mac nothing is listening yet.
+"$ROOT/scripts/ollama.sh" serve
 
 if ! ollama list | awk 'NR>1 {print $1}' | grep -qx "$MODEL"; then
   echo "Downloading ${MODEL} (about 18 GB)..."

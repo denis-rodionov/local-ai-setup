@@ -17,6 +17,8 @@ kubernetes:
   version: v1.35.0+k3s1
   # Empty on purpose. Colima's default is --disable=traefik.
   k3sArgs: []
+  # k3s keeps 6443 inside the guest. On this Mac, 127.0.0.1:6443 is another
+  # SSH tunnel, so scripts/cluster.sh publishes the local context at 6445.
   port: 6443
 
 network:

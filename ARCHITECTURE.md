@@ -37,7 +37,7 @@ Qwen stays outside the VM (~18 GB when loaded). Kubernetes ephemeral storage is 
 
 Changing the local model means editing that one alias and reapplying. Agents keep asking for `local`. Open WebUI is pointed at LiteLLM only, so the same model is not listed twice.
 
-LiteLLM speaks Ollama's chat API (`ollama_chat/...`), which is the path that supports tools. Thinking text from Qwen may look plainer in the UI than in the `ollama` terminal. Step 6 of the plan checks that. If it is a bad chat experience, Open WebUI can gain a direct Ollama connection without removing LiteLLM.
+LiteLLM speaks Ollama's chat API (`ollama_chat/...`), which is the path that supports tools. Thinking text from Qwen may look plainer in the UI than in the `ollama` terminal. Step 8 of the plan checks that. If it is a bad chat experience, Open WebUI can gain a direct Ollama connection without removing LiteLLM.
 
 **Open WebUI is the chat product.** It keeps separate chats, users, and its own RAG (Knowledge). Community tools are installed from the Open WebUI catalog in the UI. That is the "download an agent" path. This repo does not grow a Python agent framework.
 
@@ -105,7 +105,7 @@ Writing `/etc/resolver` and loading pf needs sudo once. That is the only privile
 
 Ollama environment in the agent:
 
-- `OLLAMA_HOST=127.0.0.1:11434` in step 1, the same bind as today. Step 3 moves it to `0.0.0.0:11434` so the VM can connect, and step 4 blocks that port on Wi-Fi and Ethernet.
+- `OLLAMA_HOST=127.0.0.1:11434` in step 1, the same bind as today. Step 5 moves it to `0.0.0.0:11434` so the VM can connect, and step 6 blocks that port on Wi-Fi and Ethernet.
 - `OLLAMA_KEEP_ALIVE=-1` so the model stays resident until the agent stops.
 - `OLLAMA_MAX_LOADED_MODELS=1`
 - `OLLAMA_CONTEXT_LENGTH=32768`
@@ -168,7 +168,7 @@ scripts/
 ## Accepted
 
 1. Hostnames are `https://chat.test` and `https://llm.test/v1`.
-2. Open WebUI talks only to LiteLLM, unless step 6 shows that Qwen thinking is too poor.
-3. Ollama has no public hostname. It listens on loopback until the cluster needs it. Port `11434` is blocked on `en0` and `en1` in step 4.
+2. Open WebUI talks only to LiteLLM, unless step 8 shows that Qwen thinking is too poor.
+3. Ollama has no public hostname. It listens on loopback until the cluster needs it. Port `11434` is blocked on `en0` and `en1` in step 6.
 4. VM size 4 CPU / 25 GiB RAM on `vz` / 100 GiB root disk / 160 GiB data disk. A large test may raise RAM for one restart, then put it back.
 5. First agents are Open WebUI Knowledge and catalog tools. A separate downloaded app waits until you name it.

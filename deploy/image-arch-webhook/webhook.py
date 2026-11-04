@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Rewrite amd64-only image indexes so an arm64 node can pull them.
 
-A tag that is an OCI index or Docker manifest list is left unchanged when it
-contains linux/arm64. When it does not, and it does contain linux/amd64, the
-container image is replaced with that amd64 manifest digest. A tag that is
-already a single image manifest is left unchanged: this node can pull it.
+A tag or digest that is an OCI index or Docker manifest list is left unchanged
+when it contains linux/arm64. When it does not, and it does contain linux/amd64,
+the container image is replaced with that amd64 manifest digest. A reference
+that is already a single image manifest is left unchanged: this node can pull it.
 
 Attestation entries (os/architecture "unknown") are ignored.
 """
@@ -20,6 +20,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ACCEPT = ", ".join(
@@ -47,10 +48,11 @@ def log(message):
 
 
 def parse_image(image):
-    """Return (registry, repository, tag) or None when the reference is already digested."""
-    if "@" in image:
-        return None
+    """Return (registry, repository, reference). reference is a tag or a digest."""
     rest = image
+    digest = None
+    if "@" in rest:
+        rest, digest = rest.split("@", 1)
     registry = "docker.io"
     if "/" in rest:
         first, remainder = rest.split("/", 1)
@@ -60,6 +62,9 @@ def parse_image(image):
     if registry == "docker.io" and "/" not in rest:
         rest = "library/" + rest
     name = rest.rsplit("/", 1)[-1]
+    if digest:
+        repository = rest.rsplit(":", 1)[0] if ":" in name else rest
+        return registry, repository, digest
     if ":" in name:
         repository, tag = rest.rsplit(":", 1)
     else:
@@ -107,8 +112,8 @@ def challenge_token(www_authenticate, basic):
     return f"Bearer {token}" if token else None
 
 
-def fetch_manifest(registry, repository, tag, basic=None):
-    url = f"https://{registry_host(registry)}/v2/{repository}/manifests/{tag}"
+def fetch_manifest(registry, repository, reference, basic=None):
+    url = f"https://{registry_host(registry)}/v2/{repository}/manifests/{reference}"
     headers = {"Accept": ACCEPT}
     status, response_headers, body = http_request(url, headers)
     if status == 401:
@@ -119,7 +124,9 @@ def fetch_manifest(registry, repository, tag, basic=None):
         status, response_headers, body = http_request(url, headers)
     if status != 200:
         detail = body[:200].decode("utf-8", "replace")
-        raise RuntimeError(f"manifest {status} for {registry}/{repository}:{tag}: {detail}")
+        raise RuntimeError(
+            f"manifest {status} for {registry}/{repository}:{reference}: {detail}"
+        )
     media_type = (response_headers.get("content-type") or "").split(";")[0].strip()
     return media_type, json.loads(body)
 
@@ -167,6 +174,20 @@ def store(image, decision, ttl):
         _cache[image] = (time.time() + ttl, decision)
 
 
+def registry_names(registry):
+    names = {registry}
+    if registry in ("docker.io", "index.docker.io", "registry-1.docker.io"):
+        names.update(("docker.io", "index.docker.io", "registry-1.docker.io"))
+    return names
+
+
+def auth_host(key):
+    host = key.replace("https://", "").replace("http://", "").split("/")[0]
+    if host.count(":") == 1 and not host.startswith("["):
+        host = host.split(":", 1)[0]
+    return host
+
+
 def basic_for_registry(pod, registry):
     """Optional. Anonymous manifest reads are enough for public images."""
     if not os.environ.get("KUBERNETES_SERVICE_HOST"):
@@ -188,8 +209,7 @@ def basic_for_registry(pod, registry):
             continue
         config = json.loads(base64.b64decode(encoded))
         for key, value in (config.get("auths") or {}).items():
-            host = key.replace("https://", "").replace("http://", "").split("/")[0]
-            if host != registry:
+            if auth_host(key) not in registry_names(registry):
                 continue
             if value.get("auth"):
                 return "Basic " + value["auth"]
@@ -222,15 +242,10 @@ def decide(image, pod=None):
     hit = cached(image)
     if hit is not None:
         return hit
-    parsed = parse_image(image)
-    if parsed is None:
-        decision = ("digest", None)
-        store(image, decision, CACHE_TTL)
-        return decision
-    registry, repository, tag = parsed
+    registry, repository, reference = parse_image(image)
     try:
         basic = basic_for_registry(pod, registry) if pod else None
-        media_type, manifest = fetch_manifest(registry, repository, tag, basic)
+        media_type, manifest = fetch_manifest(registry, repository, reference, basic)
         kind, digest = classify(media_type, manifest)
     except Exception as error:
         log(f"lookup failed {image}: {error}")
@@ -255,30 +270,41 @@ def container_lists(pod):
     return lists
 
 
+def lookup(task):
+    key, index, container, image, pod = task
+    return key, index, container, image, decide(image, pod)
+
+
 def patches_for(pod):
     operations = []
     notes = []
     namespace = (pod.get("metadata") or {}).get("namespace", "")
     name = (pod.get("metadata") or {}).get("name", "")
+    tasks = []
     for key, containers in container_lists(pod):
         for index, container in enumerate(containers):
             image = container.get("image")
-            if not image:
-                continue
-            reason, replacement = decide(image, pod)
-            container_name = container.get("name", str(index))
-            if replacement and replacement != image:
-                operations.append(
-                    {
-                        "op": "replace",
-                        "path": f"/spec/{key}/{index}/image",
-                        "value": replacement,
-                    }
-                )
-                notes.append(f"{container_name}->amd64")
-                log(f"rewrite {namespace}/{name} {container_name} {image} -> {replacement}")
-            else:
-                log(f"keep {namespace}/{name} {container_name} {image} ({reason})")
+            if image:
+                tasks.append((key, index, container, image, pod))
+    if not tasks:
+        return operations
+    workers = min(8, len(tasks))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        looked_up = list(pool.map(lookup, tasks))
+    for key, index, container, image, (reason, replacement) in looked_up:
+        container_name = container.get("name", str(index))
+        if replacement and replacement != image:
+            operations.append(
+                {
+                    "op": "replace",
+                    "path": f"/spec/{key}/{index}/image",
+                    "value": replacement,
+                }
+            )
+            notes.append(f"{container_name}->amd64")
+            log(f"rewrite {namespace}/{name} {container_name} {image} -> {replacement}")
+        else:
+            log(f"keep {namespace}/{name} {container_name} {image} ({reason})")
     if notes:
         annotations = (pod.get("metadata") or {}).get("annotations")
         value = ",".join(notes)

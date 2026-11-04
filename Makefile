@@ -1,5 +1,6 @@
 .PHONY: install ollama-start ollama-stop ollama-status ollama-enable ollama-disable \
-	cluster-up cluster-down cluster-status cluster-memory webhook-install
+	cluster-up cluster-down cluster-status cluster-memory webhook-install \
+	stack-stop stack-start spotlight
 
 install:
 	./scripts/install.sh
@@ -33,3 +34,12 @@ cluster-memory:
 
 webhook-install:
 	./deploy/image-arch-webhook/install.sh
+
+stack-stop:
+	./scripts/stack.sh stop
+
+stack-start:
+	./scripts/stack.sh start
+
+spotlight:
+	./scripts/spotlight.sh

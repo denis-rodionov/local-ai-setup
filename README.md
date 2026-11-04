@@ -36,6 +36,16 @@ The server listens on `127.0.0.1:11434`.
 
 Logs: `~/Library/Logs/local-ai/ollama.log`
 
+## Pause from Spotlight
+
+Cmd+Space opens Spotlight. Type `Stop Local AI` or `Start Local AI` and press Return.
+
+`make install` puts those two apps in `~/Applications`. `make spotlight` rebuilds them. They are ordinary apps, so Spotlight finds them by name. A Finder Quick Action is a different thing: it shows up in the Services menu, not when you press Cmd+Space.
+
+`Stop Local AI` runs `make stack-stop`. That stops Ollama and the cluster. The 25 GB VM reservation returns to macOS, and the model leaves memory. The cluster stays off. Ollama's login start stays enabled, so the server process comes back at the next login, without loading the model until something asks for it.
+
+`Start Local AI` runs `make stack-start`. That starts Ollama, loads Qwen, and starts the cluster. The first run after a stop can take a few minutes. macOS shows a notification when it finishes.
+
 ## Cluster
 
 After `make install`, start the Kubernetes VM:
@@ -61,6 +71,6 @@ While the VM is running, macOS keeps its whole memory allocation, even if the cl
 
 Ephemeral storage is the VM root disk, not the RAM. It was 20 GB, which is what Lens showed. It is now 100 GB (`rootDisk: 100` in `colima/ai.yaml`). That disk can only grow. To grow it again, raise `rootDisk` in `colima/ai.yaml` and in `~/.colima/ai/colima.yaml`, then `make cluster-down` and `make cluster-up`.
 
-`make webhook-install` installs a small admission webhook. On pod creation it reads each image manifest. A multi-arch tag that includes arm64 is left alone. A manifest list with no arm64 image is rewritten to the amd64 digest, and QEMU runs that image. Existing pods keep their current spec until they are recreated. `kube-system`, `cert-manager`, and the webhook's own namespace are skipped.
+`make webhook-install` installs cert-manager when it is missing, then a small admission webhook. On pod creation it reads each image manifest. A tag or digest that includes arm64 is left alone, so the node pulls the native image. A manifest list with no arm64 image, including one already pinned by its index digest, is rewritten to the amd64 manifest digest, and QEMU runs that image. A single-manifest image is left as it is. Existing pods keep their current spec until they are recreated. `kube-system`, `cert-manager`, and the webhook's own namespace are skipped.
 
 DNS names (`chat.test`, `llm.test`), LiteLLM, and Open WebUI are not installed yet. Those steps are still only described in `PLAN.md`.

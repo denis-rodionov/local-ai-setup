@@ -67,13 +67,17 @@ warm_model() {
     | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("response","(empty response)"))'
 }
 
-cmd_start() {
+cmd_serve() {
   install_plist
   bootout
   stop_listeners
   launchctl enable "$JOB"
   launchctl bootstrap "$DOMAIN" "$DEST"
   wait_for_api
+}
+
+cmd_start() {
+  cmd_serve
   warm_model
   echo
   cmd_status
@@ -123,13 +127,14 @@ cmd_status() {
 }
 
 usage() {
-  echo "usage: $0 {start|stop|status|enable|disable}" >&2
+  echo "usage: $0 {start|serve|stop|status|enable|disable}" >&2
   exit 2
 }
 
 [[ $# -eq 1 ]] || usage
 case "$1" in
   start) cmd_start ;;
+  serve) cmd_serve ;;
   stop) cmd_stop ;;
   status) cmd_status ;;
   enable) cmd_enable ;;

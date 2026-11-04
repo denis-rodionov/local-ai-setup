@@ -1,12 +1,8 @@
 # Plan
 
-Status: steps 1 and 2 are done. Next is step 3. Finish a step, check the result, then start the next one. Each step adds files to this repo and applies only those files.
+Status: steps 1, 2, and 3 are done on this Mac. Next is step 4. Finish a step, check the result, then start the next one. Each step adds files to this repo and applies only those files.
 
-Step 1 is in place. Ollama runs from the login agent on `127.0.0.1:11434`, and `qwen3.8:27b-mlx` stays loaded.
-
-Step 2 is in place. Colima profile `ai` is running on `vz`: 4 CPUs, 25 GiB RAM, 100 GiB root disk, 160 GiB data disk. `kubectl --context local get nodes` shows one Ready node, and Traefik is running. The original "no application pods" check is no longer true. An aihub release is already in `aihub-denistest`.
-
-`make webhook-install` is also installed. It is not a numbered step. On pod creation it leaves a tag alone when the image includes arm64, and rewrites a manifest list with no arm64 build to the amd64 digest. `kube-system`, `cert-manager`, and the webhook namespace are skipped. Existing pods keep their spec until they are recreated.
+This machine has no aihub release. Step 3 installed cert-manager and the image webhook.
 
 ## Step 1 — Ollama as a login service (done)
 
@@ -29,11 +25,13 @@ Done when:
 - Closing the terminal does not stop the API
 - One short generate keeps the model loaded (`OLLAMA_KEEP_ALIVE=-1`)
 
-## Step 2 — k3s cluster (done)
+## Step 2 — Empty k3s cluster (done)
 
 Add `colima/ai.yaml` and a script that copies it to `~/.colima/ai/colima.yaml` only if that profile does not exist yet, then runs `colima start --profile ai`.
 
 The file sets `vmType: vz`, `mountType: virtiofs`, 4 CPUs, 25 GiB RAM, 100 GiB root disk, 160 GiB data disk, `gatewayAddress: 192.168.5.2`, Kubernetes `v1.35.0+k3s1`, and a `k3sArgs` list that does not contain `--disable=traefik`. Colima's default list disables Traefik. The first check is that the override actually won.
+
+k3s listens on 6443 inside the guest. On this Mac another SSH tunnel already owns `127.0.0.1:6443`, so `scripts/cluster.sh` forwards the guest API to `127.0.0.1:6445` and points the `local` context there.
 
 Those 25 GiB are reserved on the Mac for the whole time the VM is running. `make cluster-memory MEMORY=30` raises it with a restart. `make cluster-memory MEMORY=25` puts it back. Do not switch this profile to krunkit. On Colima 0.10 that engine can leave the data disk unmounted after a restart.
 
@@ -41,12 +39,36 @@ Done when:
 
 - `kubectl --context local get nodes` shows one Ready node
 - `kubectl --context local get pods -A` shows Traefik running
+- No application pods exist yet
 
-The original third check was an empty cluster. That is no longer the live state: aihub and the image webhook are already there. Do not deploy LiteLLM until step 3 is checked.
+If Traefik is missing, fix `k3sArgs` before step 6. Do not deploy LiteLLM yet.
 
-If Traefik is missing, fix `k3sArgs` before step 4.
+## Step 3 — Image admission webhook (done)
 
-## Step 3 — Pod to Ollama
+`make webhook-install` installs cert-manager `v1.18.2` when the cluster does not already have it, then installs the webhook. The serving certificate comes from cert-manager.
+
+On pod creation the webhook reads each image manifest. A tag or digest that includes arm64 is left alone, so the node pulls the native image. A manifest list with no arm64 build, including one pinned by its index digest, is rewritten to the amd64 manifest digest, and QEMU runs that image. A single image manifest is left alone. `kube-system`, `cert-manager`, and `image-arch-webhook` are skipped. Pods that already exist keep their spec until they are recreated.
+
+Done when:
+
+- `kubectl --context local get mutatingwebhookconfiguration image-arch-webhook` shows a non-empty `caBundle`
+- The webhook deployment is Ready
+- A new pod whose image is an amd64-only manifest list is admitted with the amd64 digest
+- A new pod whose image includes arm64 keeps the original tag
+
+## Step 4 — Quick stop and start
+
+A way to pause the whole local setup without opening a terminal, and to bring it back the same way. Cmd+Space is the way to launch it. A Finder Quick Action is a Services-menu item, so the thing Spotlight opens is a small app.
+
+Stop unloads Ollama, so the model leaves memory, and stops the Colima cluster, so the 25 GB reservation returns to macOS. Start loads `qwen3.8:27b-mlx` again and starts the cluster. This is not `make down` from step 9. That later command stops only the VM and leaves Ollama running.
+
+Done when:
+
+- Cmd+Space, then `Stop Local AI`, stops Ollama and the cluster, and `ollama ps` shows no loaded model
+- Cmd+Space, then `Start Local AI`, brings the API back with `qwen3.8:27b-mlx` loaded and `kubectl --context local get nodes` shows the node Ready
+- Neither action opens Terminal
+
+## Step 5 — Pod to Ollama
 
 Switch the LaunchAgent to `OLLAMA_HOST=0.0.0.0:11434` and restart it, so the VM can open a connection. Loopback still works for the `ollama` CLI.
 
@@ -56,7 +78,7 @@ Done when the pod prints the model list.
 
 If the pod cannot reach the gateway, stop. Add a small bridge manifest in `deploy/ai/ollama-bridge/` and point LiteLLM at that Service instead of the gateway IP. Do not paper over it inside LiteLLM config until the bridge is green.
 
-## Step 4 — Names and TLS
+## Step 6 — Names and TLS
 
 Add:
 
@@ -79,11 +101,11 @@ Done when:
 
 Then delete the hello Ingress. Leave DNS, pf, and Traefik in place.
 
-## Step 5 — LiteLLM at llm.test
+## Step 7 — LiteLLM at llm.test
 
 Add the `ai` namespace, the LiteLLM Deployment, Service, ConfigMap, and Ingress.
 
-The committed config has one alias, `local` → `ollama_chat/qwen3.8:27b-mlx` at `http://192.168.5.2:11434` (or the bridge URL from step 3). The master key comes from `.env` into a Secret. `.env.example` and `.gitignore` land in this step.
+The committed config has one alias, `local` → `ollama_chat/qwen3.8:27b-mlx` at `http://192.168.5.2:11434` (or the bridge URL from step 5). The master key comes from `.env` into a Secret. `.env.example` and `.gitignore` land in this step.
 
 Ingress host: `llm.test`. Pods use `http://litellm.ai.svc.cluster.local:4000/v1`.
 
@@ -93,7 +115,7 @@ Done when:
 - A chat completion on that URL returns text from Qwen
 - The same call from a pod, via the cluster DNS name, returns text
 
-## Step 6 — Open WebUI at chat.test
+## Step 8 — Open WebUI at chat.test
 
 Add the Open WebUI Deployment, Service, Ingress, and `hostPath` volume at `/Users/denis/.local-ai/open-webui`.
 
@@ -107,7 +129,7 @@ Done when:
 - You have looked at a thinking reply and either accepted it or asked to add a direct Ollama connection
 - Restarting the pod keeps the chats (they are on the Mac disk)
 
-## Step 7 — Start at login
+## Step 9 — Start at login
 
 Add `host/launchagents/com.local-ai.stack.plist`. At login it starts the Colima profile, refreshes the pf guest address, and applies the manifests. It does not restart Ollama or dnsmasq; those agents already have `RunAtLoad`.
 
@@ -115,7 +137,7 @@ Add `host/launchagents/com.local-ai.stack.plist`. At login it starts the Colima 
 
 Done when a logout and login, or a reboot, brings back `https://chat.test` without a terminal. If a reboot is inconvenient, this step waits until you can do one.
 
-## Step 8 — RAG, still inside Open WebUI
+## Step 10 — RAG, still inside Open WebUI
 
 No new Deployment. In the UI, add a Knowledge collection, upload a small document, and ask a question that uses it. Embeddings stay on the small model already configured in the Open WebUI image (`sentence-transformers/all-MiniLM-L6-v2`), running in the pod.
 
@@ -123,13 +145,13 @@ Done when a question answers from the uploaded file, and the file is still there
 
 Catalog tools, if you want one, are installed from the Open WebUI tools page in this step. They persist in the same data directory. They are not copied into git.
 
-## Step 9 — Pattern for a downloaded app
+## Step 11 — Pattern for a downloaded app
 
 Add `deploy/agents/example/` and do not reference it from the main kustomization. It contains a Deployment and an Ingress for `example.test` with the LiteLLM env vars from the architecture. The image is a placeholder that must not be pulled.
 
 Done when you have read it and named a real app, or decided to stay with Open WebUI tools for now. A real app is a new step, with its own hostname, after you choose it.
 
-## Step 10 — OpenRouter alias
+## Step 12 — OpenRouter alias
 
 Add `deploy/overlays/openrouter/`. It adds the `strong` alias. Apply it only when `OPENROUTER_API_KEY` is set in `.env`. The key is not written into the ConfigMap. You set `OPENROUTER_MODEL` to an id copied from OpenRouter, with the `openrouter/` prefix LiteLLM expects.
 

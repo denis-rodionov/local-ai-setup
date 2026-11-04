@@ -118,6 +118,38 @@ print(f"kubeconfig cluster and context are {dst}")
 PY
 }
 
+# 127.0.0.1:6443 on this Mac belongs to another SSH tunnel. k3s still listens on
+# 6443 inside the guest. Forward that to 6445 and point the local context there.
+ensure_api_forward() {
+  local ssh_config="${HOME}/.colima/_lima/colima-${PROFILE}/ssh.config"
+  local host="lima-colima-${PROFILE}"
+  if [[ ! -f "$ssh_config" ]]; then
+    return 0
+  fi
+  if ! lsof -nP -iTCP:6445 -sTCP:LISTEN >/dev/null 2>&1; then
+    ssh -F "$ssh_config" -f -N -o ExitOnForwardFailure=yes \
+      -L 127.0.0.1:6445:127.0.0.1:6443 "$host"
+  fi
+  python3 - "$CONTEXT" <<'PY'
+import json, os, subprocess, sys
+from pathlib import Path
+name, = sys.argv[1:]
+cfg = json.loads(subprocess.check_output(["kubectl", "config", "view", "--raw", "-o", "json"]))
+changed = False
+for cluster in cfg.get("clusters") or []:
+    if cluster.get("name") == name:
+        server = "https://127.0.0.1:6445"
+        if cluster.get("cluster", {}).get("server") != server:
+            cluster.setdefault("cluster", {})["server"] = server
+            changed = True
+if not changed:
+    sys.exit(0)
+path = Path.home() / ".kube" / "config"
+path.write_text(json.dumps(cfg, indent=2) + "\n")
+os.chmod(path, 0o600)
+PY
+}
+
 cmd_status() {
   require_colima
   colima status --profile "$PROFILE" || true
@@ -129,6 +161,7 @@ cmd_status() {
     echo "kubectl context ${CONTEXT} is not ready yet."
     return 0
   fi
+  ensure_api_forward
   kubectl --context "$CONTEXT" get nodes
   echo
   kubectl --context "$CONTEXT" get pods -A
