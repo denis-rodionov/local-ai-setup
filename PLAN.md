@@ -1,8 +1,8 @@
 # Plan
 
-Status: steps 1 through 4 are done on this Mac. Next is step 5. Finish a step, check the result, then start the next one. Each step adds files to this repo and applies only those files.
+Status: steps 1 through 4 are done on this Mac. Step 6, names and certificates, is also done. Next is step 5. Finish a step, check the result, then start the next one. Each step adds files to this repo and applies only those files.
 
-This machine has no aihub release. Step 3 installed cert-manager and the image webhook.
+Step 3 installed cert-manager and the image webhook. Step 6 is the DNS and CA setup below. Repeat that section on a new Mac after the cluster and cert-manager exist. Keep the CA that is already in `~/.local-ca/`. A second CA makes the certificates that are already issued untrusted.
 
 ## Step 1 — Ollama as a login service (done)
 
@@ -78,28 +78,90 @@ Done when the pod prints the model list.
 
 If the pod cannot reach the gateway, stop. Add a small bridge manifest in `deploy/ai/ollama-bridge/` and point LiteLLM at that Service instead of the gateway IP. Do not paper over it inside LiteLLM config until the bridge is green.
 
-## Step 6 — Names and TLS
+## Step 6 — Names and TLS (done)
 
-Add:
+Two resolvers and one CA. The cluster half is `make dns-install`. The Mac half is a hosts block, a key pair under `~/.local-ca/`, and one trusted root. Colima already forwards guest ports 80 and 443 to the Mac, so the browser reaches Traefik at `127.0.0.1` with no extra firewall rule.
 
-- `host/dns/dnsmasq.conf` and `host/launchagents/com.local-ai.dns.plist` (dnsmasq on `127.0.0.1:5353`)
-- `host/dns/resolver`, installed to `/etc/resolver/test` (sudo)
-- `host/pf/com.local-ai.conf.template`, rendered with the guest IP and loaded as a pf anchor (sudo)
-- `deploy/system/traefik.yaml` to redirect HTTP to HTTPS
-- a throwaway Ingress `hello.test` and a mkcert wildcard for `*.test`
+### Mac names
 
-The certificate and the rendered pf rule are local files, gitignored. mkcert's root is installed into the login keychain.
+Add a marked block to `/etc/hosts`. Each name points at `127.0.0.1`. A new browser hostname is another name in this block, plus an Ingress. Pods do not use this file. On this Mac the block is:
 
-The pf anchor only redirects `127.0.0.1` ports 80 and 443 on `lo0`, and blocks inbound TCP `11434` on `en0` and `en1`.
+```text
+# aihub-local begin
+127.0.0.1 aihub.test api.aihub.test auth.aihub.test dagster.aihub.test datalake.aihub.test langfuse.aihub.test openwebui.aihub.test s3.aihub.test sysadmin.aihub.test
+127.0.0.1 denistest.test api.denistest.test auth.denistest.test dagster.denistest.test datalake.denistest.test langfuse.denistest.test openwebui.denistest.test s3.denistest.test sysadmin.denistest.test
+# aihub-local end
+```
+
+Editing `/etc/hosts` needs sudo. The block survives a reboot.
+
+### Pod names
+
+`deploy/system/coredns-custom.yaml` is the only `test:53` block. k3s imports ConfigMap `kube-system/coredns-custom`. An A query is a CNAME to `traefik.kube-system.svc.cluster.local`. An AAAA query is NOERROR with no record.
+
+`make dns-install` applies that file and restarts CoreDNS. Run it again when the cluster is recreated. Do not add a second `test:53` block, and do not rewrite the zone with `answer name`. Either one crash-loops CoreDNS.
+
+### The CA
+
+Skip this when `~/.local-ca/ca.crt` is already the CA the cluster uses. Otherwise create it once:
+
+```bash
+mkdir -p ~/.local-ca
+chmod 700 ~/.local-ca
+openssl ecparam -name prime256v1 -genkey -noout -out ~/.local-ca/ca.key
+chmod 600 ~/.local-ca/ca.key
+openssl req -new -x509 -key ~/.local-ca/ca.key -sha256 -days 3650 \
+  -subj "/CN=Local .test CA" \
+  -out ~/.local-ca/ca.crt \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -addext "subjectKeyIdentifier=hash" \
+  -addext "nameConstraints=critical,permitted;DNS:test"
+```
+
+Trust that public file in the login keychain. macOS asks for approval:
+
+```bash
+security add-trusted-cert -r trustRoot \
+  -k ~/Library/Keychains/login.keychain-db \
+  ~/.local-ca/ca.crt
+```
+
+After cert-manager is installed, give it the same key pair and a ClusterIssuer. The Secret has to be in the `cert-manager` namespace:
+
+```bash
+kubectl --context local -n cert-manager create secret tls local-ca \
+  --cert="$HOME/.local-ca/ca.crt" \
+  --key="$HOME/.local-ca/ca.key"
+kubectl --context local apply -f - <<'EOF'
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: local-ca
+spec:
+  ca:
+    secretName: local-ca
+EOF
+```
+
+An Ingress that wants a certificate sets `cert-manager.io/cluster-issuer: local-ca`.
+
+A pod that calls `https://…test` gets a ConfigMap of the public certificate only:
+
+```bash
+kubectl --context local -n NAMESPACE create configmap local-test-ca \
+  --from-file=ca.crt="$HOME/.local-ca/ca.crt"
+```
+
+Secret `cert-manager/local-ca` also contains `tls.key`. Leave it in `cert-manager`. The same rule applies to any older CA secret: the private key does not go into an application namespace.
 
 Done when:
 
-- `dscacheutil -q host -a name chat.test` returns `127.0.0.1`
-- `https://hello.test` loads in the browser with a trusted certificate and no port in the URL
-- `http://hello.test` redirects to HTTPS
-- From another device on the LAN, port `11434` on this Mac does not accept a connection
-
-Then delete the hello Ingress. Leave DNS, pf, and Traefik in place.
+- `dscacheutil -q host -a name aihub.test` returns `127.0.0.1`
+- `curl -sS -o /dev/null -w '%{http_code}\n' https://aihub.test` prints `200` and the certificate verifies
+- `kubectl --context local get clusterissuer local-ca` shows Ready
+- A pod resolves `auth.aihub.test` to the Traefik ClusterIP
+- `~/.local-ca/ca.key` is not in git
 
 ## Step 7 — LiteLLM at llm.test
 
@@ -131,7 +193,7 @@ Done when:
 
 ## Step 9 — Start at login
 
-Add `host/launchagents/com.local-ai.stack.plist`. At login it starts the Colima profile, refreshes the pf guest address, and applies the manifests. It does not restart Ollama or dnsmasq; those agents already have `RunAtLoad`.
+Add `host/launchagents/com.local-ai.stack.plist`. At login it starts the Colima profile and applies the manifests. It does not restart Ollama; that agent already has `RunAtLoad`. The `/etc/hosts` block and the login-keychain trust are already on the Mac. After a cluster is recreated, run `make dns-install` again and recreate Secret `cert-manager/local-ca` from `~/.local-ca/` if the Secret is gone.
 
 `make down` stops the VM until the next login or the next `make up`. It leaves Ollama running.
 

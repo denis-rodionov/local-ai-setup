@@ -73,4 +73,4 @@ Ephemeral storage is the VM root disk, not the RAM. It was 20 GB, which is what 
 
 `make webhook-install` installs cert-manager when it is missing, then a small admission webhook. On pod creation it reads each image manifest. A tag or digest that includes arm64 is left alone, so the node pulls the native image. A manifest list with no arm64 image, including one already pinned by its index digest, is rewritten to the amd64 manifest digest, and QEMU runs that image. A single-manifest image is left as it is. Existing pods keep their current spec until they are recreated. `kube-system`, `cert-manager`, and the webhook's own namespace are skipped.
 
-DNS names (`chat.test`, `llm.test`), LiteLLM, and Open WebUI are not installed yet. Those steps are still only described in `PLAN.md`.
+`make dns-install` teaches pods to resolve `*.test` to Traefik. The Mac side is the `# aihub-local` block in `/etc/hosts` and the CA in `~/.local-ca/`. Step 6 of `PLAN.md` is the procedure for a new machine. LiteLLM and Open WebUI are not installed yet.

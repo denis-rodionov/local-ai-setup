@@ -1,0 +1,20 @@
+# In-cluster names under .test. k3s imports this ConfigMap at
+# /etc/coredns/custom/*.server. This is the only test:53 block.
+# A second one makes CoreDNS fail its config check and crash-loop.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  test.server: |
+    test:53 {
+        errors
+        template IN A test {
+            match ^.*\.test\.$
+            answer "{{ .Name }} 60 IN CNAME traefik.kube-system.svc.cluster.local."
+        }
+        template IN AAAA test {
+            rcode NOERROR
+        }
+    }

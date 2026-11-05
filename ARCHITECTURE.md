@@ -49,33 +49,41 @@ A heavier downloaded app (another service with its own UI) is a later Deployment
 
 **Workloads are plain Kubernetes manifests**, built with kustomize (already inside kubectl). Helm is not added for two Deployments. Traefik itself is the chart k3s ships; we only add a `HelmChartConfig` for it.
 
-**Hostnames are one short label on `.test`, with no port in the URL.** `chat.test` and `llm.test` are the chat UI and the proxy. `.local` stays with Bonjour: macOS resolves that zone through mDNS, so `chat.local` is slow and can collide with AirPlay and other Macs. `.test` is a reserved TLD (RFC 2606), and the names are just as short.
+**Hostnames are names under `.test`, with no port in the URL.** `.test` is a reserved TLD (RFC 2606). `.local` stays with Bonjour: macOS resolves that zone through mDNS, so a `.local` name is slow and can collide with AirPlay and other Macs.
+
+The Mac and the cluster resolve these names differently.
+
+On the Mac, `/etc/hosts` maps each public name to `127.0.0.1`. The block is marked `# aihub-local begin` and `# aihub-local end`. It is a list. A new browser name is another word on those lines, then a new Ingress. `chat.test` and `llm.test` are the names planned for Open WebUI and LiteLLM. They join that list when those Ingresses exist.
+
+Inside the cluster, CoreDNS answers every `*.test` name. Pods do not read `/etc/hosts`. A pod that calls another pod directly still uses the Kubernetes service name.
 
 | Who is calling | Address |
 | --- | --- |
-| You, in a browser | `https://chat.test` |
-| You, or a Mac app, calling the proxy | `https://llm.test/v1` |
-| A pod calling the proxy | `http://litellm.ai.svc.cluster.local:4000/v1` |
+| You, in a browser, for a name listed in `/etc/hosts` | `https://aihub.test`, and later `https://chat.test` |
+| You, or a Mac app, calling the proxy, once `llm.test` is listed | `https://llm.test/v1` |
+| A pod calling any `*.test` name | `https://auth.aihub.test` and the rest, via CoreDNS |
+| A pod calling the proxy before that Ingress exists | `http://litellm.ai.svc.cluster.local:4000/v1` |
 | LiteLLM calling Ollama | `http://192.168.5.2:11434` |
 
 `192.168.5.2` is the Colima gateway: the Mac as seen from the VM. It is pinned in the Colima profile. Ollama does not get a public name. It has no authentication, so it is not put on an Ingress.
-
-A new service is another short host (`n8n.test`, and so on). DNS is a wildcard for `.test`, so the new name does not need a new DNS record. Pods do not use `.test`. CoreDNS inside the cluster cannot see the Mac resolver. In-cluster callers use Kubernetes service DNS.
 
 ## How a request moves
 
 ```mermaid
 flowchart LR
-  browser["Browser or Mac app"]
-  dns["dnsmasq *.test to 127.0.0.1"]
-  pf["pf on the Mac, ports 80 and 443"]
+  browser["Browser on the Mac"]
+  hosts["/etc/hosts to 127.0.0.1"]
+  lima["Lima forward of ports 80 and 443"]
   traefik["Traefik in k3s"]
+  pod["Pod"]
+  coredns["CoreDNS CNAME to Traefik"]
   webui["Open WebUI"]
   proxy["LiteLLM"]
   ollama["Ollama on macOS"]
   cloud["OpenRouter, later"]
 
-  browser --> dns --> pf --> traefik
+  browser --> hosts --> lima --> traefik
+  pod --> coredns --> traefik
   traefik --> webui
   traefik --> proxy
   webui --> proxy
@@ -83,29 +91,44 @@ flowchart LR
   proxy --> cloud
 ```
 
-Edge path:
+From the Mac:
 
-1. dnsmasq listens on `127.0.0.1:5353` and answers every `*.test` name with `127.0.0.1`. macOS sends that zone there via `/etc/resolver/test`.
-2. A pf rule on `lo0` forwards `127.0.0.1:80` and `:443` to the VM's ingress ports. The guest address is filled in when the VM is up. The rule file is generated; the template is in git.
-3. The same anchor blocks TCP `11434` on `en0` and `en1`, so Ollama is not offered to Wi-Fi and Ethernet. The VM reaches it through the Colima bridge, not through those interfaces.
-4. Traefik, which Colima disables unless we override `k3sArgs`, terminates TLS for `*.test` and routes on the Host header.
-5. The certificate is a mkcert wildcard, trusted in the login keychain. The key stays on the Mac, not in git.
+1. `/etc/hosts` answers the listed names with `127.0.0.1`.
+2. Colima's Lima forward publishes guest TCP ports 1–65535 on the Mac, so `127.0.0.1:80` and `:443` reach the VM. Traefik is the process behind those ports. The Host header selects the Ingress.
+3. Nothing else is installed for this path. There is no dnsmasq, no `/etc/resolver/test`, and no pf anchor.
 
-Writing `/etc/resolver` and loading pf needs sudo once. That is the only privileged host change.
+From a pod:
+
+1. `deploy/system/coredns-custom.yaml` is the only `test:53` server block. k3s loads it from ConfigMap `kube-system/coredns-custom` at `/etc/coredns/custom/*.server`.
+2. An A query receives a CNAME to `traefik.kube-system.svc.cluster.local`. The address follows the Service, so the ClusterIP is not copied into the file. An AAAA query receives NOERROR and no record, so the client keeps the A answer.
+3. A second `test:53` block makes CoreDNS reject its config and crash-loop. A rewrite that uses `answer name` does the same. `make dns-install` applies this file and restarts CoreDNS.
+
+## Certificates
+
+One CA signs every `.test` certificate. It lives on the Mac in `~/.local-ca/` (`ca.crt` and `ca.key`, directory mode `0700`, key mode `0600`). The key is not in git.
+
+The certificate is ECDSA P-256, subject `CN=Local .test CA`, valid for about ten years. The extensions are critical: basic constraints `CA:TRUE`, key usage certificate sign and CRL sign, and a name constraint permitting DNS `test`. That constraint allows names such as `aihub.test` and `api.aihub.test`, and no other tree.
+
+The login keychain trusts `~/.local-ca/ca.crt`. One root is enough. ClusterIssuer `local-ca` reads Secret `cert-manager/local-ca`, which is the same key pair (`tls.crt` and `tls.key`) in the `cert-manager` namespace. An Ingress asks for a certificate with `cert-manager.io/cluster-issuer: local-ca`.
+
+A pod that calls `https://…test` trusts the public file only. Its namespace gets a ConfigMap built with `--from-file=ca.crt=$HOME/.local-ca/ca.crt`. Secret `cert-manager/local-ca` also holds the private key, so it stays in `cert-manager` and is never copied into an application namespace.
+
+Writing the hosts block needs sudo once. Trusting the CA asks for approval in the login keychain once. Both survive a reboot. A new cluster needs the Secret, the ClusterIssuer, and `make dns-install` again. The files in `~/.local-ca/` stay where they are.
 
 ## What runs where
 
 | Piece | Where | When it starts |
 | --- | --- | --- |
 | Ollama | macOS LaunchAgent from this repo | At login |
-| dnsmasq | macOS LaunchAgent from this repo | At login |
+| `/etc/hosts` names and the trusted CA | macOS | Already present; they survive reboot |
+| CoreDNS `test:53` block | ConfigMap `kube-system/coredns-custom` | With the cluster, after `make dns-install` |
 | Colima VM and k3s | Profile `ai` | At login, after the manual bring-up works |
 | Traefik, LiteLLM, Open WebUI | k3s | With the VM |
 | Chats, uploads, installed tools | `~/.local-ai/open-webui` on the Mac, mounted into the pod | With Open WebUI |
 
 Ollama environment in the agent:
 
-- `OLLAMA_HOST=127.0.0.1:11434` in step 1, the same bind as today. Step 5 moves it to `0.0.0.0:11434` so the VM can connect, and step 6 blocks that port on Wi-Fi and Ethernet.
+- `OLLAMA_HOST=127.0.0.1:11434` in step 1, the same bind as today. Step 5 moves it to `0.0.0.0:11434` so the VM can connect.
 - `OLLAMA_KEEP_ALIVE=-1` so the model stays resident until the agent stops.
 - `OLLAMA_MAX_LOADED_MODELS=1`
 - `OLLAMA_CONTEXT_LENGTH=32768`
@@ -147,12 +170,9 @@ PLAN.md
 Makefile
 colima/ai.yaml
 host/launchagents/com.local-ai.ollama.plist
-host/launchagents/com.local-ai.dns.plist
 host/launchagents/com.local-ai.stack.plist
-host/dns/dnsmasq.conf
-host/dns/resolver
-host/pf/com.local-ai.conf.template
 deploy/kustomization.yaml
+deploy/system/coredns-custom.yaml
 deploy/system/traefik.yaml
 deploy/ai/namespace.yaml
 deploy/ai/litellm/
@@ -169,6 +189,6 @@ scripts/
 
 1. Hostnames are `https://chat.test` and `https://llm.test/v1`.
 2. Open WebUI talks only to LiteLLM, unless step 8 shows that Qwen thinking is too poor.
-3. Ollama has no public hostname. It listens on loopback until the cluster needs it. Port `11434` is blocked on `en0` and `en1` in step 6.
+3. Ollama has no public hostname and is not put on an Ingress.
 4. VM size 4 CPU / 25 GiB RAM on `vz` / 100 GiB root disk / 160 GiB data disk. A large test may raise RAM for one restart, then put it back.
 5. First agents are Open WebUI Knowledge and catalog tools. A separate downloaded app waits until you name it.
