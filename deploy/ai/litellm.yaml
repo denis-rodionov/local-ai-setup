@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm
+  namespace: ai
+data:
+  config.yaml: |
+    model_list:
+      - model_name: local
+        litellm_params:
+          model: ollama_chat/qwen3.8:27b-mlx
+          api_base: http://ollama-bridge.ai.svc.cluster.local:11434
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm
+  namespace: ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: litellm
+  template:
+    metadata:
+      labels:
+        app: litellm
+    spec:
+      containers:
+        - name: litellm
+          image: ghcr.io/berriai/litellm:v1.106.6
+          args: ["--config", "/app/config.yaml", "--port", "4000"]
+          ports:
+            - name: http
+              containerPort: 4000
+          env:
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: litellm
+                  key: master_key
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+          readinessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: config
+          configMap:
+            name: litellm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm
+  namespace: ai
+spec:
+  selector:
+    app: litellm
+  ports:
+    - name: http
+      port: 4000
+      targetPort: http

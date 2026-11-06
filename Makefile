@@ -1,5 +1,6 @@
 .PHONY: install ollama-start ollama-stop ollama-status ollama-enable ollama-disable \
 	cluster-up cluster-down cluster-status cluster-memory webhook-install dns-install \
+	litellm-install \
 	stack-stop stack-start spotlight
 
 install:
@@ -39,6 +40,9 @@ dns-install:
 	kubectl --context local apply -f deploy/system/coredns-custom.yaml
 	kubectl --context local -n kube-system rollout restart deploy/coredns
 	kubectl --context local -n kube-system rollout status deploy/coredns
+
+litellm-install:
+	./deploy/ai/install.sh
 
 stack-stop:
 	./scripts/stack.sh stop

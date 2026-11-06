@@ -37,7 +37,7 @@ Qwen stays outside the VM (~18 GB when loaded). Kubernetes ephemeral storage is 
 
 Changing the local model means editing that one alias and reapplying. Agents keep asking for `local`. Open WebUI is pointed at LiteLLM only, so the same model is not listed twice.
 
-LiteLLM speaks Ollama's chat API (`ollama_chat/...`), which is the path that supports tools. Thinking text from Qwen may look plainer in the UI than in the `ollama` terminal. Step 8 of the plan checks that. If it is a bad chat experience, Open WebUI can gain a direct Ollama connection without removing LiteLLM.
+LiteLLM speaks Ollama's chat API (`ollama_chat/...`), which is the path that supports tools. Thinking text from Qwen may look plainer in the UI than in the `ollama` terminal. Step 6 of the plan checks that. If it is a bad chat experience, Open WebUI can gain a direct Ollama connection without removing LiteLLM.
 
 **Open WebUI is the chat product.** It keeps separate chats, users, and its own RAG (Knowledge). Community tools are installed from the Open WebUI catalog in the UI. That is the "download an agent" path. This repo does not grow a Python agent framework.
 
@@ -53,19 +53,20 @@ A heavier downloaded app (another service with its own UI) is a later Deployment
 
 The Mac and the cluster resolve these names differently.
 
-On the Mac, `/etc/hosts` maps each public name to `127.0.0.1`. The block is marked `# aihub-local begin` and `# aihub-local end`. It is a list. A new browser name is another word on those lines, then a new Ingress. `chat.test` and `llm.test` are the names planned for Open WebUI and LiteLLM. They join that list when those Ingresses exist.
+On the Mac, `/etc/hosts` maps each public name to `127.0.0.1`. The block is marked `# aihub-local begin` and `# aihub-local end`. It is a list. A new browser name is another word on those lines, then a new Ingress. `llm.test` is already in the block. `chat.test` joins it with Open WebUI.
 
 Inside the cluster, CoreDNS answers every `*.test` name. Pods do not read `/etc/hosts`. A pod that calls another pod directly still uses the Kubernetes service name.
 
 | Who is calling | Address |
 | --- | --- |
 | You, in a browser, for a name listed in `/etc/hosts` | `https://aihub.test`, and later `https://chat.test` |
-| You, or a Mac app, calling the proxy, once `llm.test` is listed | `https://llm.test/v1` |
+| You, or a Mac app, calling the proxy | `https://llm.test/v1` |
 | A pod calling any `*.test` name | `https://auth.aihub.test` and the rest, via CoreDNS |
-| A pod calling the proxy before that Ingress exists | `http://litellm.ai.svc.cluster.local:4000/v1` |
-| LiteLLM calling Ollama | `http://192.168.5.2:11434` |
+| A pod calling the proxy | `http://litellm.ai.svc.cluster.local:4000/v1` |
+| LiteLLM calling Ollama | `http://ollama-bridge.ai.svc.cluster.local:11434` |
+| The bridge calling Ollama | `http://192.168.5.2:11434` |
 
-`192.168.5.2` is the Colima gateway: the Mac as seen from the VM. It is pinned in the Colima profile. Ollama does not get a public name. It has no authentication, so it is not put on an Ingress.
+`192.168.5.2` is the Colima gateway: the Mac as seen from the VM. It is pinned in the Colima profile. The VM can open it. A pod that opens it directly times out, so the bridge is a host-network proxy in the `ai` namespace. Ollama does not get a public name. It has no authentication, so it is not put on an Ingress.
 
 ## How a request moves
 
@@ -79,6 +80,7 @@ flowchart LR
   coredns["CoreDNS CNAME to Traefik"]
   webui["Open WebUI"]
   proxy["LiteLLM"]
+  bridge["Ollama bridge"]
   ollama["Ollama on macOS"]
   cloud["OpenRouter, later"]
 
@@ -87,7 +89,7 @@ flowchart LR
   traefik --> webui
   traefik --> proxy
   webui --> proxy
-  proxy --> ollama
+  proxy --> bridge --> ollama
   proxy --> cloud
 ```
 
@@ -115,6 +117,62 @@ A pod that calls `https://…test` trusts the public file only. Its namespace ge
 
 Writing the hosts block needs sudo once. Trusting the CA asks for approval in the login keychain once. Both survive a reboot. A new cluster needs the Secret, the ClusterIssuer, and `make dns-install` again. The files in `~/.local-ca/` stay where they are.
 
+On a new Mac, after cert-manager is installed, repeat the same three pieces. Skip the CA commands when `~/.local-ca/ca.crt` is already the CA the cluster uses.
+
+The Mac list is a marked block in `/etc/hosts`. On this machine it is:
+
+```text
+# aihub-local begin
+127.0.0.1 aihub.test api.aihub.test auth.aihub.test dagster.aihub.test datalake.aihub.test langfuse.aihub.test openwebui.aihub.test s3.aihub.test sysadmin.aihub.test
+127.0.0.1 denistest.test api.denistest.test auth.denistest.test dagster.denistest.test datalake.denistest.test langfuse.denistest.test openwebui.denistest.test s3.denistest.test sysadmin.denistest.test
+# aihub-local end
+```
+
+A new browser name is another word in that block. Pods get every `*.test` name from `make dns-install`.
+
+Create the CA once:
+
+```bash
+mkdir -p ~/.local-ca
+chmod 700 ~/.local-ca
+openssl ecparam -name prime256v1 -genkey -noout -out ~/.local-ca/ca.key
+chmod 600 ~/.local-ca/ca.key
+openssl req -new -x509 -key ~/.local-ca/ca.key -sha256 -days 3650 \
+  -subj "/CN=Local .test CA" \
+  -out ~/.local-ca/ca.crt \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -addext "subjectKeyIdentifier=hash" \
+  -addext "nameConstraints=critical,permitted;DNS:test"
+security add-trusted-cert -r trustRoot \
+  -k ~/Library/Keychains/login.keychain-db \
+  ~/.local-ca/ca.crt
+```
+
+Load it into cert-manager:
+
+```bash
+kubectl --context local -n cert-manager create secret tls local-ca \
+  --cert="$HOME/.local-ca/ca.crt" \
+  --key="$HOME/.local-ca/ca.key"
+kubectl --context local apply -f - <<'EOF'
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: local-ca
+spec:
+  ca:
+    secretName: local-ca
+EOF
+```
+
+An Ingress sets `cert-manager.io/cluster-issuer: local-ca`. A pod that calls `https://…test` gets only the public file:
+
+```bash
+kubectl --context local -n NAMESPACE create configmap local-test-ca \
+  --from-file=ca.crt="$HOME/.local-ca/ca.crt"
+```
+
 ## What runs where
 
 | Piece | Where | When it starts |
@@ -128,7 +186,7 @@ Writing the hosts block needs sudo once. Trusting the CA asks for approval in th
 
 Ollama environment in the agent:
 
-- `OLLAMA_HOST=127.0.0.1:11434` in step 1, the same bind as today. Step 5 moves it to `0.0.0.0:11434` so the VM can connect.
+- `OLLAMA_HOST=0.0.0.0:11434`, so the VM can connect. The `ollama` command on the Mac still uses `127.0.0.1`.
 - `OLLAMA_KEEP_ALIVE=-1` so the model stays resident until the agent stops.
 - `OLLAMA_MAX_LOADED_MODELS=1`
 - `OLLAMA_CONTEXT_LENGTH=32768`
@@ -188,7 +246,7 @@ scripts/
 ## Accepted
 
 1. Hostnames are `https://chat.test` and `https://llm.test/v1`.
-2. Open WebUI talks only to LiteLLM, unless step 8 shows that Qwen thinking is too poor.
+2. Open WebUI talks only to LiteLLM, unless step 6 shows that Qwen thinking is too poor.
 3. Ollama has no public hostname and is not put on an Ingress.
 4. VM size 4 CPU / 25 GiB RAM on `vz` / 100 GiB root disk / 160 GiB data disk. A large test may raise RAM for one restart, then put it back.
 5. First agents are Open WebUI Knowledge and catalog tools. A separate downloaded app waits until you name it.
