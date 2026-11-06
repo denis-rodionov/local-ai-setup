@@ -25,3 +25,8 @@ network:
   gatewayAddress: 192.168.5.2
 
 autoActivate: true
+
+# Postgres data, cache, and uploads. This is the only host directory the VM needs.
+mounts:
+  - location: ~/.local-ai
+    writable: true

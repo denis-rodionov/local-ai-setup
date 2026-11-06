@@ -182,7 +182,7 @@ kubectl --context local -n NAMESPACE create configmap local-test-ca \
 | CoreDNS `test:53` block | ConfigMap `kube-system/coredns-custom` | With the cluster, after `make dns-install` |
 | Colima VM and k3s | Profile `ai` | At login, after the manual bring-up works |
 | Traefik, LiteLLM, Open WebUI | k3s | With the VM |
-| Chats, uploads, installed tools | `~/.local-ai/open-webui` on the Mac, mounted into the pod | With Open WebUI |
+| Chats and the LiteLLM admin UI | Postgres on `litellm-db`, files in `~/.local-ai/litellm-postgres` | With the VM |
 
 Ollama environment in the agent:
 
@@ -200,9 +200,9 @@ After sleep, Metal can drop the weights. The next request loads them again. Keep
 
 ## Data and secrets
 
-- Open WebUI's directory is a `hostPath` at `/Users/denis/.local-ai/open-webui`. Colima mounts your home directory into the VM, so this path is the same on both sides. `colima stop` keeps the chats. `colima delete` removes the VM and keeps this directory.
-- LiteLLM is stateless. Its config is a ConfigMap.
-- `.env` holds `LITELLM_MASTER_KEY`, `WEBUI_SECRET_KEY`, and later `OPENROUTER_API_KEY`. It is gitignored. `.env.example` is committed with empty secrets.
+- One Postgres server, `litellm-db`, stores both apps. LiteLLM uses database `litellm`. Open WebUI uses database `openwebui`. The files are a `hostPath` at `~/.local-ai/litellm-postgres`. `colima stop` keeps them. Do not put Open WebUI back on SQLite: the virtiofs mount returns "database disk image is malformed".
+- `~/.local-ai/open-webui` is only the cache and uploads. The Colima profile mounts `~/.local-ai` into the VM at the same path.
+- `.env` holds `LITELLM_MASTER_KEY`, `LITELLM_DB_PASSWORD`, `WEBUI_SECRET_KEY`, and later `OPENROUTER_API_KEY`. It is gitignored. `.env.example` is committed with empty secrets.
 - Image tags are pinned: `ghcr.io/open-webui/open-webui:v0.12.5` and `ghcr.io/berriai/litellm:v1.106.6`. Both publish arm64.
 
 ## Memory budget

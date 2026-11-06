@@ -10,6 +10,8 @@ data:
         litellm_params:
           model: ollama_chat/qwen3.8:27b-mlx
           api_base: http://ollama-bridge.ai.svc.cluster.local:11434
+    general_settings:
+      database_url: os.environ/DATABASE_URL
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -39,10 +41,21 @@ spec:
                 secretKeyRef:
                   name: litellm
                   key: master_key
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: litellm
+                  key: database_url
           volumeMounts:
             - name: config
               mountPath: /app/config.yaml
               subPath: config.yaml
+          startupProbe:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
           readinessProbe:
             httpGet:
               path: /health/liveliness

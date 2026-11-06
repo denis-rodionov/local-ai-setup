@@ -1,0 +1,76 @@
+# The admin UI at llm.test will not log in without a database.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm-db
+  namespace: ai
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: litellm-db
+  template:
+    metadata:
+      labels:
+        app: litellm-db
+    spec:
+      initContainers:
+        - name: chown
+          image: postgres:16-alpine
+          command: ["sh", "-c", "mkdir -p /var/lib/postgresql/data/pgdata && chown -R 999:999 /var/lib/postgresql/data"]
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: litellm
+            - name: POSTGRES_DB
+              value: litellm
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: litellm
+                  key: db_password
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "litellm", "-d", "litellm"]
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: data
+          hostPath:
+            path: /Users/denis/.local-ai/litellm-postgres
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm-db
+  namespace: ai
+spec:
+  selector:
+    app: litellm-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

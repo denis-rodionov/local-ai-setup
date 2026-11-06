@@ -75,4 +75,4 @@ Ephemeral storage is the VM root disk, not the RAM. It was 20 GB, which is what 
 
 `make dns-install` teaches pods to resolve `*.test` to Traefik. The Mac side is the `# aihub-local` block in `/etc/hosts` and the CA in `~/.local-ca/`. `ARCHITECTURE.md` records how to repeat that on a new machine.
 
-`make litellm-install` installs LiteLLM after `.env` contains `LITELLM_MASTER_KEY`. Add `llm.test` to the hosts block first. Pods reach Ollama through the bridge Service, not through `192.168.5.2`. Open WebUI is not installed yet.
+`make litellm-install` installs LiteLLM after `.env` contains `LITELLM_MASTER_KEY`. Add `llm.test` to the hosts block first. Pods reach Ollama through the bridge Service, not through `192.168.5.2`. Open WebUI is at `https://chat.test`. `make webui-install` installs it.

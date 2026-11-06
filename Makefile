@@ -1,6 +1,6 @@
 .PHONY: install ollama-start ollama-stop ollama-status ollama-enable ollama-disable \
 	cluster-up cluster-down cluster-status cluster-memory webhook-install dns-install \
-	litellm-install \
+	litellm-install webui-install \
 	stack-stop stack-start spotlight
 
 install:
@@ -43,6 +43,9 @@ dns-install:
 
 litellm-install:
 	./deploy/ai/install.sh
+
+webui-install:
+	./deploy/ai/open-webui-install.sh
 
 stack-stop:
 	./scripts/stack.sh stop

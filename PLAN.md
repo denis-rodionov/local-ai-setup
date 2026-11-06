@@ -1,6 +1,6 @@
 # Plan
 
-Status: steps 1 through 5 are done on this Mac. Next is step 6. Finish a step, check the result, then start the next one. Each step adds files to this repo and applies only those files.
+Status: steps 1 through 6 are done on this Mac. Next is step 7. Finish a step, check the result, then start the next one. Each step adds files to this repo and applies only those files.
 
 Step 3 installed cert-manager and the image webhook. Names under `.test` and ClusterIssuer `local-ca` are already on this Mac. `ARCHITECTURE.md` records how to repeat them. Keep the CA that is already in `~/.local-ca/`. A second CA makes the certificates that are already issued untrusted.
 
@@ -72,7 +72,7 @@ Done when:
 
 Install LiteLLM so `https://llm.test` reaches Qwen. Pods cannot open the Colima gateway, even though the VM can. Do not point LiteLLM at `192.168.5.2`. The bridge in `deploy/ai/ollama-bridge/` runs on the VM network and proxies to `http://192.168.5.2:11434`. LiteLLM calls `http://ollama-bridge.ai.svc.cluster.local:11434`.
 
-Copy `.env.example` to `.env` and set `LITELLM_MASTER_KEY`. `make litellm-install` stores that key in a Secret, then applies the `ai` namespace, the bridge, and the LiteLLM Deployment, Service, ConfigMap, and Ingress. The certificate comes from ClusterIssuer `local-ca`. The alias is `local` → `ollama_chat/qwen3.8:27b-mlx`. Pods use `http://litellm.ai.svc.cluster.local:4000/v1`.
+Copy `.env.example` to `.env` and set `LITELLM_MASTER_KEY`. `make litellm-install` stores that key in a Secret, starts Postgres for the admin UI, then applies the `ai` namespace, the bridge, and the LiteLLM Deployment, Service, ConfigMap, and Ingress. The certificate comes from ClusterIssuer `local-ca`. The alias is `local` → `ollama_chat/qwen3.8:27b-mlx`. Pods use `http://litellm.ai.svc.cluster.local:4000/v1`. The admin UI signs in as `admin` with the master key.
 
 Add `llm.test` to the `# aihub-local` block in `/etc/hosts`. Editing that file needs an administrator password. A shell that has not sourced `.env` does not have the key.
 
@@ -86,9 +86,9 @@ curl -sS https://llm.test/v1/chat/completions \
   -d '{"model":"local","messages":[{"role":"user","content":"Say hello."}]}'
 ```
 
-## Step 6 — Open WebUI at chat.test
+## Step 6 — Open WebUI at chat.test (done)
 
-Add the Open WebUI Deployment, Service, Ingress, and `hostPath` volume at `/Users/denis/.local-ai/open-webui`. Add `chat.test` to the same `/etc/hosts` block as `llm.test`. The certificate comes from ClusterIssuer `local-ca`.
+Add the Open WebUI Deployment, Service, and Ingress. Add `chat.test` to the same `/etc/hosts` block as `llm.test`. The certificate comes from ClusterIssuer `local-ca`. `make webui-install` creates database `openwebui` on the LiteLLM Postgres server and points `DATABASE_URL` at it. The `hostPath` at `/Users/denis/.local-ai/open-webui` keeps the cache and uploads only.
 
 The container's OpenAI base URL is `http://litellm.ai.svc.cluster.local:4000/v1`, with the master key from the existing Secret. `ENABLE_OLLAMA_API` is false. `WEBUI_URL` is `https://chat.test`.
 
@@ -98,7 +98,7 @@ Done when:
 - The model picker shows `local` and not a duplicate Ollama entry
 - A reply arrives from Qwen
 - You have looked at a thinking reply and either accepted it or asked to add a direct Ollama connection
-- Restarting the pod keeps the chats (they are on the Mac disk)
+- Restarting the pod keeps the chats (they are in Postgres)
 
 ## Step 7 — Start at login
 
